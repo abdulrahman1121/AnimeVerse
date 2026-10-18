@@ -1,0 +1,51 @@
+# ===== Secrets / environment =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+
+CLAUDE.md
+
+# ===== Java / Spring Boot =====
+target/
+build/
+out/
+*.class
+*.jar
+*.war
+*.log
+!gradle/wrapper/gradle-wrapper.jar
+!.mvn/wrapper/maven-wrapper.jar
+.gradle/
+hs_err_pid*
+
+# ===== Node / React =====
+node_modules/
+dist/
+coverage/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== IDEs =====
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
+.classpath
+.project
+.settings/
+
+# ===== macOS =====
+.DS_Store
+
+# ===== AWS / infra =====
+.aws-sam/
+cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
