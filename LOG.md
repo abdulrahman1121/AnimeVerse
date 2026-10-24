@@ -10,9 +10,9 @@
 Ideas, features, and work we've agreed to do but haven't started.
 
 - [ ] **V1: This Year in Anime.** Show every anime from the 2026 calendar year (Jan 1, 2026 to ongoing). Sort: airing now → finished this year (most recently ended first). Upcoming shows go in their own section under an "Upcoming" header. Every card is clearly labeled with genres, season, episodes, and a rating. No personal filtering in V1.
-- [ ] **V2: Keep Up.** Sign in with Google, pick the anime I want to follow, and get an email whenever a new episode airs.
+- [ ] **V2: Keep Up.** Sign in with Google, pick the anime I want to follow, and get an email whenever a new episode airs. Also email followers if a show goes on hiatus or gets cancelled.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
-- [ ] Design the V1 database schema
+- [ ] Write the V1 database schema as a real migration (design agreed; see Decisions)
 - [ ] Build the AniList sync job (pulls data into my Postgres DB on a schedule)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `backend/` (Spring Boot)
@@ -21,7 +21,7 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Planning V1 and V2 scope and architecture
+- V1 database schema (branch `feat/v1-database-schema`)
 
 ## ✅ Changelog (done)
 What changed, when, and why.
@@ -41,6 +41,13 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
+- **Decided (Oct 23):** V1 schema has 4 tables: `anime`, `genre`, `anime_genre`, `airing_episode`. Studios are left out until a feature needs them.
+- **Decided (Oct 23):** Primary key is **our own `id`**, with AniList's ID kept as a separate unique `anilist_id` column. I don't want my database tied to AniList's numbering.
+- **Decided (Oct 23):** Genres use **join tables** (`genre` + `anime_genre`). It's the cleaner relational design, each genre name is stored once, and it's the same many-to-many pattern V2's follow list will use.
+- **Decided (Oct 23):** "Airing now" sorts by **newest premiere first** to highlight brand-new shows.
+- **Decided (Oct 23):** **Hiatus and cancelled shows are hidden in V1.** In V2, followers get an email when a show they follow changes to one of those.
+- **Decided (Oct 23):** Partial dates use **a normal `date` plus a precision column** (`DAY` / `MONTH` / `YEAR`). Month and year are what matter; this keeps sorting easy and the display honest ("April 2027", not "April 1").
+- **Decided (Oct 23):** Every big addition gets its **own branch** with a short, clear name. It merges into `main` through a **GitHub pull request** using **squash merge**: I already review every commit carefully, so `main` gets one clean commit per feature, and the PR page keeps the step-by-step detail.
 - **Decided (Oct 18):** Shows that started before 2026 but are **still airing count**. People are watching them right now.
 - **Decided (Oct 18):** Cards show the **broadcast season** (e.g. "Spring 2026") plus **aired/total episodes** (e.g. "Ep 8 / 12"). Franchise season numbers ("Season 2") come later.
 - **Decided (Oct 18):** Rating uses AniList's **averageScore**. Unrated shows store `NULL` in the DB and the card shows a **NEW** badge. I first wanted to show 100%, but that would rank unrated shows above the best-reviewed ones and mix fake data in with real scores.
@@ -49,6 +56,7 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-23:_ Many-to-many relationships (a show has many genres, a genre has many shows) need a third "join" table holding one row per link. A **join** in SQL follows those foreign keys from one table to the next.
 - _2026-10-18:_ Don't store made-up values to fill a gap. `NULL` means "unknown" in SQL; keep the data honest and let the UI decide how to display it (the "NEW" badge). Remember `NULLS LAST` when sorting.
 - _2026-10-18:_ At ~150–300 anime per year, any database is fast. The real question is which data model fits my queries. Mine are filter-and-join, which points to SQL.
 - _2026-10-17:_ Set up `.gitignore` before the first commit; it's much easier than removing build output or secrets from history later.
