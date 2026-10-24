@@ -41,12 +41,14 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
-- **Open:** Does a show that started in late 2025 and is still airing in 2026 count?
-- **Open:** Which rating to show (AniList average score vs. mean score), and what "season" on a card means?
+- **Decided (Oct 18):** Shows that started before 2026 but are **still airing count**. People are watching them right now.
+- **Decided (Oct 18):** Cards show the **broadcast season** (e.g. "Spring 2026") plus **aired/total episodes** (e.g. "Ep 8 / 12"). Franchise season numbers ("Season 2") come later.
+- **Decided (Oct 18):** Rating uses AniList's **averageScore**. Unrated shows store `NULL` in the DB and the card shows a **NEW** badge. I first wanted to show 100%, but that would rank unrated shows above the best-reviewed ones and mix fake data in with real scores.
 - **Open:** AWS hosting for the backend and frontend.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-18:_ Don't store made-up values to fill a gap. `NULL` means "unknown" in SQL; keep the data honest and let the UI decide how to display it (the "NEW" badge). Remember `NULLS LAST` when sorting.
 - _2026-10-18:_ At ~150–300 anime per year, any database is fast. The real question is which data model fits my queries. Mine are filter-and-join, which points to SQL.
 - _2026-10-17:_ Set up `.gitignore` before the first commit; it's much easier than removing build output or secrets from history later.
