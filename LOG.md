@@ -19,12 +19,16 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- V1 database schema as a Flyway migration (branch `feat/v1-database-schema`)
+- JPA entities + repositories (branch `feat/jpa-entities`)
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-25
+- Added JPA entities `Anime`, `Genre`, `AiringEpisode` and enums for status, format, season and date precision. `ddl-auto=validate` confirmed they match the tables.
+- Added Spring Data repositories with derived queries (`findByAnilistId`, `findByName`, `findByAnimeAndEpisode`, `countByAnimeIdAndAiringAtLessThanEqual`).
+- Wrote my first real tests (`AnimeRepositoryTest`): genres save and load back, the aired-episode count is right, and deleting a show cascades to its episodes but keeps the genre.
+- Merged PR #3 (V1 schema migration).
 - Wrote `V1__create_v1_schema.sql`: the 4 tables with types, NOT NULLs, CHECK rules, cascading deletes, and indexes for the feed queries.
 - Merged PR #2 (backend scaffold + local Postgres).
 
@@ -49,6 +53,10 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
+- **Decided (Oct 25):** Code is organized **by feature** (`anime/`, later `sync/`), not by layer, so related code sits together.
+- **Decided (Oct 25):** `Anime` ↔ `Genre` is a `@ManyToMany` **`Set`**. A Set can't hold duplicates, which matches the join table's primary key, and Hibernate handles Sets better than Lists for many-to-many.
+- **Decided (Oct 25):** Episodes link **one way** (`AiringEpisode` → `Anime`). "Ep X / Y" comes from a count query, so the app never loads every episode just to show one number.
+- **Decided (Oct 25):** Genres change only through `addGenre` / `removeGenre`; `getGenres()` returns a read-only view.
 - **Decided (Oct 25):** IDs are **`bigint GENERATED ALWAYS AS IDENTITY`**: the modern SQL standard, and Postgres refuses hand-picked IDs.
 - **Decided (Oct 25):** Text columns use **`text`**, not `varchar(n)`. Same speed in Postgres, and no made-up length limit for a long title to break.
 - **Decided (Oct 25):** Fixed lists (status, format, season, precision) are **`text` + `CHECK`**. Easy to extend with a migration, and they map to Java enums.
@@ -76,6 +84,11 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-25:_ **Encapsulation is choosing which changes are allowed**, not adding a getter and setter for every field. The constructor takes exactly the NOT NULL fields, there's no `setId`, dates are set in pairs, and genres change only through two methods.
+- _2026-10-25:_ JPA needs a no-arg constructor (Hibernate creates an empty object, then fills it). Make it `protected` so my own code can't build an invalid object. With **field access** (annotations on fields), Hibernate uses the fields directly, which is why a read-only getter doesn't break it.
+- _2026-10-25:_ `@Enumerated(STRING)`, never ORDINAL: reordering an enum would silently change what old rows mean. `@ManyToOne` is EAGER by default, so set it to LAZY.
+- _2026-10-25:_ Spring Data writes the repository code from the method name. In tests, `@Transactional` rolls everything back, and `flush()` + `clear()` force reads to really hit the database.
+- _2026-10-25:_ An index isn't an extra column. It's a separate **sorted** copy of the indexed columns plus pointers to the rows (a B-tree), so Postgres jumps to the first match and walks forward. `UNIQUE` creates one automatically because it must check for duplicates on every write. Small tables use Seq Scan anyway because it's cheaper.
 - _2026-10-25:_ The database is the last line of defense. Types and `CHECK` rules apply to every write, whatever code does it. A score of 140 or a status typo can never get stored.
 - _2026-10-25:_ Postgres auto-indexes primary keys and `UNIQUE` columns, but **not foreign keys**. Index what you filter, sort and join on.
 - _2026-10-25:_ A Flyway migration is never edited after it has run. Changes go in a new `V2__` file, the same way commits work.
