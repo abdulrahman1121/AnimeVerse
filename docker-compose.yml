@@ -1,0 +1,23 @@
+# Local development database for AnimeVerse.
+# Start:  docker compose up -d      Stop: docker compose down
+# Values come from the gitignored .env file next to this one.
+services:
+  postgres:
+    image: postgres:18
+    container_name: animeverse-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"            # your Mac's port : the container's port
+    volumes:
+      - pgdata:/var/lib/postgresql   # keeps data when the container is removed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

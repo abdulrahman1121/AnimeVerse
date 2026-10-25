@@ -26,6 +26,8 @@ What's being worked on right now.
 What changed, when, and why.
 
 ### 2026-10-24
+- Added `docker-compose.yml` (Postgres 18 in a container, data kept in a named volume) and the DB connection config in `application.properties`. Credentials live in a gitignored `.env` that both Docker Compose and Spring read. The app now starts, connects, and `./mvnw test` passes.
+- Fixed a startup crash: Postgres rejected the time zone `US/Pacific`. The app now runs in UTC (a `static` block in `BackendApplication` for normal runs, Surefire's `-Duser.timezone=UTC` for tests).
 - Generated the Spring Boot backend in `backend/` (Maven, Spring Boot 4.1.2, Java 25 LTS) with Web MVC, Data JPA, PostgreSQL driver, Flyway and Validation. Removed unused `static/`, `templates/` and `HELP.md`.
 - Merged PR #1 (schema decisions docs) with squash merge, my first pull request.
 
@@ -44,6 +46,9 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
+- **Decided (Oct 24):** The backend **runs in UTC**. Store and process times in UTC, convert to the viewer's local time only in the UI. That's the server standard, and the app behaves the same on my Mac and on AWS.
+- **Decided (Oct 24):** Hibernate `ddl-auto=validate`: **only Flyway changes the schema**. Hibernate just checks that my Java classes match the tables.
+- **Decided (Oct 24):** No `.env.example`. This repo isn't meant for others to clone and run.
 - **Decided (Oct 24):** Build with **Maven**. It's the most common in jobs and Spring docs, and `mvnw` (the Maven wrapper) means nobody needs Maven installed.
 - **Decided (Oct 24):** **Java 25 (LTS)** and **Spring Boot 4.1.2 (stable)**. I first generated with Java 27 and Boot 4.2.0-RC1. 27 isn't long-term support, and RC means not officially released.
 - **Decided (Oct 24):** Local Postgres runs in **Docker Compose**, so the setup lives in the repo.
@@ -63,6 +68,10 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-24:_ **Time-zone bug.** Java picks up my Mac's zone (`US/Pacific`) and the Postgres driver sends it on every connection. The Postgres 18 image doesn't include old alias names like that one, so it refused the connection. To read a stack trace, go straight to the last `Caused by:` line.
+- _2026-10-24:_ **A `static` block only runs when a class is initialized** (e.g. `main()` uses it), not when Spring just reads its annotations. That's why my UTC fix worked for `spring-boot:run` but not for tests, which needed Surefire's `argLine`.
+- _2026-10-24:_ **Stale class file bug.** VS Code compiled into `target/` for Java 27 (class file version 71), and my Java 25 runtime only supports up to 69. Fixes: `./mvnw clean`, plus VS Code settings so it follows `pom.xml`. When a build makes no sense after a config change, try `clean` first.
+- _2026-10-24:_ `.java` is source; `javac` compiles it to `.class` bytecode, which the JVM runs on any machine. Every class file starts with `cafe babe`. Commit what people write, ignore what tools generate (`target/`).
 - _2026-10-24:_ Release suffixes matter: `-SNAPSHOT`, `-M1` and `-RC1` are unreleased builds. LTS Java versions (21, 25…) are what companies run. Spring Boot's `<parent>` picks compatible library versions, so my dependencies list none.
 - _2026-10-23:_ Many-to-many relationships (a show has many genres, a genre has many shows) need a third "join" table holding one row per link. A **join** in SQL follows those foreign keys from one table to the next.
 - _2026-10-18:_ Don't store made-up values to fill a gap. `NULL` means "unknown" in SQL; keep the data honest and let the UI decide how to display it (the "NEW" badge). Remember `NULLS LAST` when sorting.
