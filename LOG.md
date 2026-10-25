@@ -12,7 +12,6 @@ Ideas, features, and work we've agreed to do but haven't started.
 - [ ] **V1: This Year in Anime.** Show every anime from the 2026 calendar year (Jan 1, 2026 to ongoing). Sort: airing now → finished this year (most recently ended first). Upcoming shows go in their own section under an "Upcoming" header. Every card is clearly labeled with genres, season, episodes, and a rating. No personal filtering in V1.
 - [ ] **V2: Keep Up.** Sign in with Google, pick the anime I want to follow, and get an email whenever a new episode airs. Also email followers if a show goes on hiatus or gets cancelled.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
-- [ ] Write the V1 database schema as a real migration (design agreed; see Decisions)
 - [ ] Build the AniList sync job (pulls data into my Postgres DB on a schedule)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `frontend/` (React)
@@ -20,10 +19,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Backend scaffold + local Postgres (branch `chore/scaffold-backend`)
+- V1 database schema as a Flyway migration (branch `feat/v1-database-schema`)
 
 ## ✅ Changelog (done)
 What changed, when, and why.
+
+### 2026-10-25
+- Wrote `V1__create_v1_schema.sql`: the 4 tables with types, NOT NULLs, CHECK rules, cascading deletes, and indexes for the feed queries.
+- Merged PR #2 (backend scaffold + local Postgres).
 
 ### 2026-10-24
 - Added `docker-compose.yml` (Postgres 18 in a container, data kept in a named volume) and the DB connection config in `application.properties`. Credentials live in a gitignored `.env` that both Docker Compose and Spring read. The app now starts, connects, and `./mvnw test` passes.
@@ -46,6 +49,11 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
+- **Decided (Oct 25):** IDs are **`bigint GENERATED ALWAYS AS IDENTITY`**: the modern SQL standard, and Postgres refuses hand-picked IDs.
+- **Decided (Oct 25):** Text columns use **`text`**, not `varchar(n)`. Same speed in Postgres, and no made-up length limit for a long title to break.
+- **Decided (Oct 25):** Fixed lists (status, format, season, precision) are **`text` + `CHECK`**. Easy to extend with a migration, and they map to Java enums.
+- **Decided (Oct 25):** Deleting a show **cascades** to its genre links and episodes. Deleting a genre still linked to shows is refused.
+- **Decided (Oct 25):** Points in time are **`timestamptz`**, small numbers are `smallint`, columns are `NOT NULL` unless "unknown" is a real state, and indexes match the feed's filters and sorts.
 - **Decided (Oct 24):** The backend **runs in UTC**. Store and process times in UTC, convert to the viewer's local time only in the UI. That's the server standard, and the app behaves the same on my Mac and on AWS.
 - **Decided (Oct 24):** Hibernate `ddl-auto=validate`: **only Flyway changes the schema**. Hibernate just checks that my Java classes match the tables.
 - **Decided (Oct 24):** No `.env.example`. This repo isn't meant for others to clone and run.
@@ -68,6 +76,9 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-25:_ The database is the last line of defense. Types and `CHECK` rules apply to every write, whatever code does it. A score of 140 or a status typo can never get stored.
+- _2026-10-25:_ Postgres auto-indexes primary keys and `UNIQUE` columns, but **not foreign keys**. Index what you filter, sort and join on.
+- _2026-10-25:_ A Flyway migration is never edited after it has run. Changes go in a new `V2__` file, the same way commits work.
 - _2026-10-24:_ **Time-zone bug.** Java picks up my Mac's zone (`US/Pacific`) and the Postgres driver sends it on every connection. The Postgres 18 image doesn't include old alias names like that one, so it refused the connection. To read a stack trace, go straight to the last `Caused by:` line.
 - _2026-10-24:_ **A `static` block only runs when a class is initialized** (e.g. `main()` uses it), not when Spring just reads its annotations. That's why my UTC fix worked for `spring-boot:run` but not for tests, which needed Surefire's `argLine`.
 - _2026-10-24:_ **Stale class file bug.** VS Code compiled into `target/` for Java 27 (class file version 71), and my Java 25 runtime only supports up to 69. Fixes: `./mvnw clean`, plus VS Code settings so it follows `pom.xml`. When a build makes no sense after a config change, try `clean` first.
