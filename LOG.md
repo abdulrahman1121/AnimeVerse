@@ -12,14 +12,13 @@ Ideas, features, and work we've agreed to do but haven't started.
 - [ ] **V1: This Year in Anime.** Show every anime from the 2026 calendar year (Jan 1, 2026 to ongoing). Sort: airing now → finished this year (most recently ended first). Upcoming shows go in their own section under an "Upcoming" header. Every card is clearly labeled with genres, season, episodes, and a rating. No personal filtering in V1.
 - [ ] **V2: Keep Up.** Sign in with Google, pick the anime I want to follow, and get an email whenever a new episode airs. Also email followers if a show goes on hiatus or gets cancelled.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
-- [ ] Build the AniList sync job (pulls data into my Postgres DB on a schedule)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `frontend/` (React)
 
 ## 🚧 In Progress
 What's being worked on right now.
 
-- JPA entities + repositories (branch `feat/jpa-entities`)
+- AniList sync job (branch `feat/anilist-sync`)
 
 ## ✅ Changelog (done)
 What changed, when, and why.
@@ -53,6 +52,11 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 18):** V2 starts with **Google sign-in + email**. SMS is postponed because texting costs money per message and needs US carrier registration.
 - **Decided (Oct 17):** Backend is Java Spring Boot; frontend is React.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
+- **Decided (Oct 25):** The sync calls AniList with **Spring's `RestClient`**: plain HTTP POST with a GraphQL body. I see exactly what goes over the wire, and it needs no new dependency.
+- **Decided (Oct 25):** Sync scope: **no adult titles** (friendly for anyone), **every format except MUSIC**, and **Upcoming covers only the next season** (about 3 months ahead).
+- **Decided (Oct 25):** The sync runs **every 3 hours + once at startup**.
+- **Decided (Oct 25):** "Ep X" = the **highest episode number that has aired**, not a count of rows. Counting breaks for shows like One Piece (1,000+ episodes) whose full history isn't stored.
+- **Decided (Oct 25):** Shows that drop out of AniList's results are **left in place** for V1. It's rare, and the feed queries filter anyway.
 - **Decided (Oct 25):** Code is organized **by feature** (`anime/`, later `sync/`), not by layer, so related code sits together.
 - **Decided (Oct 25):** `Anime` ↔ `Genre` is a `@ManyToMany` **`Set`**. A Set can't hold duplicates, which matches the join table's primary key, and Hibernate handles Sets better than Lists for many-to-many.
 - **Decided (Oct 25):** Episodes link **one way** (`AiringEpisode` → `Anime`). "Ep X / Y" comes from a count query, so the app never loads every episode just to show one number.
@@ -84,6 +88,7 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-25:_ GraphQL: one URL, and you POST a query listing exactly the fields you want; the response has that exact shape. I checked AniList's real response with `curl` before writing any Java. `airingAt` is a Unix timestamp (seconds since 1970 UTC). Airing shows often have `episodes: null` (total not announced) and ONAs can have `season: null`.
 - _2026-10-25:_ **Encapsulation is choosing which changes are allowed**, not adding a getter and setter for every field. The constructor takes exactly the NOT NULL fields, there's no `setId`, dates are set in pairs, and genres change only through two methods.
 - _2026-10-25:_ JPA needs a no-arg constructor (Hibernate creates an empty object, then fills it). Make it `protected` so my own code can't build an invalid object. With **field access** (annotations on fields), Hibernate uses the fields directly, which is why a read-only getter doesn't break it.
 - _2026-10-25:_ `@Enumerated(STRING)`, never ORDINAL: reordering an enum would silently change what old rows mean. `@ManyToOne` is EAGER by default, so set it to LAZY.
