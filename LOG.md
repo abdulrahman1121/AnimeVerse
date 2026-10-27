@@ -18,12 +18,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ☐, sync job + 3-hour schedule ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ☐, 3-hour schedule ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-26
+- Wrote `AnimePageSaver` and `AnimeSyncService`. The service fetches the releasing, finished-this-year and upcoming lists, merges them by AniList id, cuts them into pages of 50, and saves each page in its own transaction. Shows are inserted or updated, and genres are mirrored from AniList. 3 unit tests (hand-written fakes) and 3 integration tests against Postgres.
+- Wrote `AnimeMapper` and `UnmappableMediaException`: turns AniList's JSON shape into my `Anime` entity, with validation before anything is changed. 9 unit tests.
 - Wrote `AniListClient`: posts GraphQL queries with `RestClient`, walks every page until `hasNextPage` is false, waits as long as AniList's `Retry-After` says on HTTP 429 (3 attempts), and has connect/read timeouts. 8 tests run against a fake AniList server.
 - Checked all my queries against the real AniList API with `curl`.
 
@@ -49,6 +51,15 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 26):** Each page of up to 50 shows is saved in **one transaction per page**. A database error rolls back only that page and the next sync retries it. One transaction per show would lose less on an error but means far more commits, and per-page is the usual best practice.
+- **Decided (Oct 26):** The page saver is its **own Spring bean**. `@Transactional` works through a proxy, so a method calling another method on its own class would skip it. The sync service has no transaction itself, so none stays open while waiting on the network.
+- **Decided (Oct 26):** A show that **can't be mapped** (missing title, unknown format, score outside 0..100) is **logged and skipped**, so one bad record never stops the sync. The mapper checks everything before it changes anything.
+- **Decided (Oct 26):** Genres **mirror AniList**: a genre AniList drops from a show is unlinked, and a new one is created if it doesn't exist yet. The genre rows themselves are never deleted.
+- **Decided (Oct 26):** A score of **0 is treated as unrated** and stored as `NULL`, so the card shows NEW instead of a misleading 0. Episode counts of 0 or less also become `NULL`.
+- **Decided (Oct 26):** Every sync is a **full refresh** of the shows V1 displays, because I can't tell which ones changed without fetching them. Duplicates across the three lists are removed by AniList id, first list wins, and an "upcoming" show with no start date is skipped.
+- **Open (Oct 26):** AniList's RELEASING filter only returns shows that are airing right now. If a show I stored goes on **hiatus or is cancelled**, it never comes back in my fetch, so its stored status goes stale. V1 doesn't care, but V2's hiatus and cancellation emails will need a way to re-check the shows I already have.
+- **Open (Oct 26):** `synced_at` is stamped on every row every sync, so every row counts as changed and gets an UPDATE. I could later skip rows where nothing meaningful changed.
 
 - **Decided (Oct 18):** Data comes from the **AniList GraphQL API**. It has rich metadata plus the exact airing time of each episode, which V2 needs.
 - **Decided (Oct 18):** A **scheduled sync job** copies AniList data into my own database, and the app reads only from my DB. This makes pages fast, keeps me under AniList's rate limits, and the site still works if AniList goes down.
@@ -92,6 +103,11 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-26:_ **A transaction is "all or nothing"**, like a bank transfer where both the withdrawal and the deposit happen or neither does. Each commit costs a disk-safety write, so I group shows into pages of 50 and commit once per page, not once per show. A **page** is just a chunk of the fetched list; one sync of about 250 shows is about 5 pages and 5 commits.
+- _2026-10-26:_ **A proxy is a stand-in object in front of the real one**, like a receptionist who writes "call started" before putting me through and "call finished" after. Spring wraps `@Transactional` beans in one to open and commit the transaction. Calling a method on my own class skips the receptionist, so no transaction opens. That's why the saver is its own class.
+- _2026-10-26:_ **Validate before you change.** The mapper throws before it touches the entity, so catching a skipped show inside a transaction can't leave a half-updated row behind.
+- _2026-10-26:_ **Hand-written fakes are a valid way to unit test.** A test subclass overrides just the methods the service calls, so I can test the paging logic with no Spring, database or network.
 
 - _2026-10-26:_ **A mock only proves what I scripted.** My mocked tests passed even though the Upcoming query let undated shows through. Only the real API showed it. Mock for speed, then check once against the real thing.
 - _2026-10-26:_ **Unit vs integration tests decide what needs Docker.** `AniListClientTest` and `PartialDateTest` start no Spring and no database. Only `@SpringBootTest` classes start the whole app, which connects to Postgres. `MockRestServiceServer` fakes the other end of the connection (AniList) and replaces the HTTP transport under `RestClient`. There's no web server of mine involved.
