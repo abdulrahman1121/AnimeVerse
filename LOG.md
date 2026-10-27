@@ -18,10 +18,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`)
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ☐, sync job + 3-hour schedule ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
+
+### 2026-10-26
+- Wrote `AniListClient`: posts GraphQL queries with `RestClient`, walks every page until `hasNextPage` is false, waits as long as AniList's `Retry-After` says on HTTP 429 (3 attempts), and has connect/read timeouts. 8 tests run against a fake AniList server.
+- Checked all my queries against the real AniList API with `curl`.
 
 ### 2026-10-25
 - Added JPA entities `Anime`, `Genre`, `AiringEpisode` and enums for status, format, season and date precision. `ddl-auto=validate` confirmed they match the tables.
@@ -54,6 +58,7 @@ Choices made (and why), plus questions still open.
 - **Decided (Oct 17):** Commits happen together, after I review the changes and the message.
 - **Decided (Oct 25):** The sync calls AniList with **Spring's `RestClient`**: plain HTTP POST with a GraphQL body. I see exactly what goes over the wire, and it needs no new dependency.
 - **Decided (Oct 25):** Sync scope: **no adult titles** (friendly for anyone), **every format except MUSIC**, and **Upcoming covers only the next season** (about 3 months ahead).
+- **Decided (Oct 26):** Upcoming = not-yet-released shows with a start date **after Dec 31, 2025 and before the end of next season**. The lower bound is what keeps undated shows out, because AniList's `startDate_lesser` alone also matches shows with no date.
 - **Decided (Oct 25):** The sync runs **every 3 hours + once at startup**.
 - **Decided (Oct 25):** "Ep X" = the **highest episode number that has aired**, not a count of rows. Counting breaks for shows like One Piece (1,000+ episodes) whose full history isn't stored.
 - **Decided (Oct 25):** Shows that drop out of AniList's results are **left in place** for V1. It's rare, and the feed queries filter anyway.
@@ -88,6 +93,9 @@ Choices made (and why), plus questions still open.
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
 
+- _2026-10-26:_ **A mock only proves what I scripted.** My mocked tests passed even though the Upcoming query let undated shows through. Only the real API showed it. Mock for speed, then check once against the real thing.
+- _2026-10-26:_ **Unit vs integration tests decide what needs Docker.** `AniListClientTest` and `PartialDateTest` start no Spring and no database. Only `@SpringBootTest` classes start the whole app, which connects to Postgres. `MockRestServiceServer` fakes the other end of the connection (AniList) and replaces the HTTP transport under `RestClient`. There's no web server of mine involved.
+- _2026-10-26:_ **Paging and rate limits.** `perPage` is items per page, not the number of pages. AniList caps `total` at 5,000, so loop on `hasNextPage` and keep a safety cap on pages. GraphQL reports bad queries as HTTP 200 with an `errors` list, and rate limiting as HTTP 429 with `Retry-After`. Inject the HTTP builder and the "sleeper" so tests need no network and never really wait.
 - _2026-10-25:_ GraphQL: one URL, and you POST a query listing exactly the fields you want; the response has that exact shape. I checked AniList's real response with `curl` before writing any Java. `airingAt` is a Unix timestamp (seconds since 1970 UTC). Airing shows often have `episodes: null` (total not announced) and ONAs can have `season: null`.
 - _2026-10-25:_ **Encapsulation is choosing which changes are allowed**, not adding a getter and setter for every field. The constructor takes exactly the NOT NULL fields, there's no `setId`, dates are set in pairs, and genres change only through two methods.
 - _2026-10-25:_ JPA needs a no-arg constructor (Hibernate creates an empty object, then fills it). Make it `protected` so my own code can't build an invalid object. With **field access** (annotations on fields), Hibernate uses the fields directly, which is why a read-only getter doesn't break it.
