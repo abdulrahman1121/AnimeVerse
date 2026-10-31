@@ -18,12 +18,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, fix the airing-schedule download hitting AniList's 5,000-entry limit (fetch the year in smaller time windows) ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- Wrote `SyncJob`: runs the show sync, then the episode sync, with `@Scheduled(fixedDelay)` every 3 hours and once when the app starts, in the background. If the show sync fails, the episode sync is skipped for that run. Added `animeverse.sync.enabled` and `animeverse.sync.interval` to `application.properties`, and a test config (`src/test/resources/config/application.properties`) that turns the job off so tests never call AniList. 3 unit tests.
+- First real run: the show sync fetched and saved 816 shows with 0 skipped and 0 failed pages. The episode sync then failed with a 400 from AniList: the whole-year schedule is more than 5,000 entries, over AniList's limit. The job logged it and carried on, and the shows were not affected. Fix is the next commit.
 - Wrote `EpisodeSyncService` and `AiringEpisodePageSaver`: fetch the airing schedule for the whole year so far plus two weeks ahead, save it in pages of 50 (one transaction per page), keep only episodes of shows I already track, and update the air time if AniList reschedules an episode. 2 unit tests and 3 integration tests.
 - Replaced the aired-episode count query with `findMaxAiredEpisode`, a JPQL `@Query` returning the highest episode number that has aired. Updated `AnimeRepositoryTest` to match.
 
@@ -55,6 +57,11 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 31):** The sync uses **`fixedDelay`**: the next run starts 3 hours after the previous one finishes, so two runs can never overlap. A fixed rate would keep the clock times predictable but needs a guard of my own to avoid overlap. The drift is small because a run should rarely take long.
+- **Decided (Oct 31):** The startup sync **runs in the background**. If the app waited for the sync, it wouldn't accept any connections until it finished, so users would see "can't connect". Refreshing the page can't restart a sync: only the timer and app startup trigger it, and page requests only read my database.
+- **Decided (Oct 31):** Tests run with `animeverse.sync.enabled=false`, set in `src/test/resources/config/application.properties`. Spring Boot loads that file on top of the main one, so only the difference lives there. A same-named file directly in `src/test/resources` would have replaced the main file.
+- **Decided (Oct 31):** To get under AniList's 5,000-entry limit, the episode sync will **slice the year into smaller time windows** and fetch each one separately. This keeps my "whole year" rule and doesn't change the design. Asking AniList for only my shows (`mediaId_in`) would download less but needs more code; maybe later if the slicing is ever too slow.
 
 - **Decided (Oct 31):** The episode sync fetches **the whole year (Jan 1, 2026 to two weeks ahead)** on every run, not just a recent window. Airing shows rarely have a long episode history now and finished shows barely pass 25 episodes, so the volume is small, and one rule works for every run with no separate first-time backfill. I'll log the real request count on the first run to check that.
 - **Decided (Oct 31):** Episodes are saved **only for shows already in my anime table**. AniList's schedule covers every anime, so rows for other shows are skipped. This also means the episode sync must run after the show sync, and if the show sync fails, the episode sync is **skipped for that run**: no show, no saved episode, and the next run catches up.
@@ -111,6 +118,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **Measure, don't estimate.** I guessed 3,000 to 4,000 airing rows for the year. The real number is over 5,000 because AniList's schedule covers every anime, not just mine. The 5,000 cap on any single query (page times perPage) shows up as an HTTP **400** error for this case, not the HTTP 200 with an `errors` list I assumed. Always log real counts on the first run.
+- _2026-10-31:_ **What rolls back and what doesn't.** A bad show is skipped (the mapper rejects it before the database). Only a real database error rolls back a page, and a page is only the 50 rows of that sync step. The show sync and episode sync are separate: committed shows can't be undone by an episode failure. A failed download aborts that sync before anything is saved.
+- _2026-10-31:_ **"App startup" is the backend process starting**, not a visitor opening the site. The sync is the baker who bakes on a schedule; visitors only buy what's already on the shelf, so page requests never touch AniList.
 
 - _2026-10-31:_ **`COUNT` vs `MAX` depends on what's stored.** Because I only store this year's episodes, counting rows would show One Piece as "Ep 40". The highest aired episode number shows the real "Ep 1168". Pick the aggregate that matches what the data actually holds.
 - _2026-10-31:_ **`@Query` and JPQL.** Spring Data can build a query from a method name, but not something like `max`. A `@Query` takes JPQL, which names the Java entity and its fields (`AiringEpisode`, `e.airingAt`), not the table and columns. An aggregate over zero rows returns null, which Spring turns into `Optional.empty()`.
