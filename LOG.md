@@ -18,12 +18,13 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ☐, then the PR ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ✅, handle timeouts and retry transient failures ☐, then the PR ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- `AniListClient` now turns every HTTP error other than 429 (any 4xx or 5xx) into an `AniListException` whose message has the status code and the start of AniList's own response body, with the original error kept as the cause. The 400 from the 5,000-entry limit would now read "AniList returned HTTP 400: ...Page depth exceeds maximum allowed...". 2 new tests (400 and 500).
 - Fixed the episode sync hitting AniList's 5,000-entry limit: `EpisodeSyncService` now fetches the year in 30-day windows (about 11 of them right now), saves each window page by page, and counts a failed window download in a new `failedWindows` field without stopping the others. 4 unit tests, including no gaps or overlaps between windows. Checked against the real AniList and it works.
 - Wrote `SyncJob`: runs the show sync, then the episode sync, with `@Scheduled(fixedDelay)` every 3 hours and once when the app starts, in the background. If the show sync fails, the episode sync is skipped for that run. Added `animeverse.sync.enabled` and `animeverse.sync.interval` to `application.properties`, and a test config (`src/test/resources/config/application.properties`) that turns the job off so tests never call AniList. 3 unit tests.
 - First real run: the show sync fetched and saved 816 shows with 0 skipped and 0 failed pages. The episode sync then failed with a 400 from AniList: the whole-year schedule is more than 5,000 entries, over AniList's limit. The job logged it and carried on, and the shows were not affected. Fix is the next commit.
@@ -58,6 +59,9 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 31):** Both **4xx and 5xx** responses from AniList become an `AniListException` with AniList's own message (the first 500 characters of the body), so the log explains the failure and I only handle one exception type. The original Spring exception stays as the cause for the full stack trace.
+- **Decided (Oct 31):** Timeouts, connection failures and **transient** errors (502, 503, 504) will be **retried with exponential backoff** (up to 3 attempts, waiting 5 s then 10 s), sharing the attempt counter with the 429 retries. Errors that would fail the same way every time (other 4xx) are never retried. That's the next commit.
 
 - **Decided (Oct 31):** The airing schedule is fetched in **30-day windows**, each saved right after its download. Each window is a separate query, so the 5,000 limit never applies. The windows are half-open and each asks from one second early, because AniList's time bounds are exclusive: nothing is missed and nothing is fetched twice.
 - **Decided (Oct 31):** If one window's download fails, it is **logged, counted in `failedWindows` and skipped**, and the other windows still run. The windows are independent, so one bad month shouldn't throw away the rest of the year. Aborting on the first failure would be simpler but could leave the other months stale for good.
@@ -123,6 +127,9 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **Java uses the first `catch` that matches, so order matters.** The 429 handler has to come before the general HTTP-error handler, because `TooManyRequests` is also a `RestClientResponseException`. Put the general one first and the retries would silently stop working. The existing retry tests are what would catch that mistake.
+- _2026-10-31:_ **A good error message says what the other side said.** The first time the 5,000 limit failed, I got a raw stack trace. Including the start of AniList's response body in the exception turns that into a one-line reason I can act on, and keeping the original exception as the cause means nothing is lost.
 
 - _2026-10-31:_ **Slicing a big query by time is a standard way around a pagination cap.** The limit applies per query, so smaller queries each stay under it. The details that matter are half-open windows (each starts exactly where the last ended) and, because AniList's bounds are exclusive, nudging the lower bound by one second so a boundary episode is neither lost nor duplicated.
 - _2026-10-31:_ **Time cost follows the number of requests.** The episode sync is much slower than the show sync because it makes far more requests (around 11 windows times many pages each), and every request pays for a network round trip. Saving to my own database is cheap by comparison.

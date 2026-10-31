@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
@@ -24,6 +25,7 @@ import org.springframework.mock.http.client.MockClientHttpRequest;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 /**
  * Tests the client against a fake AniList: MockRestServiceServer intercepts the HTTP call, checks
@@ -128,6 +130,32 @@ class AniListClientTest {
 
 		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
 		assertTrue(e.getMessage().contains("Unknown argument"), e.getMessage());
+	}
+
+	@Test
+	void turnsA4xxIntoAnExceptionThatShowsAniListsOwnMessage() {
+		// A real response: the airing schedule asked for more than AniList's 5,000-entry limit.
+		server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.BAD_REQUEST)
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"errors\":[{\"message\":\"Page depth exceeds maximum allowed for API requests (5000 entries)\","
+						+ "\"status\":400}],\"data\":{\"Page\":null}}"));
+
+		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
+
+		assertTrue(e.getMessage().contains("HTTP 400"), e.getMessage());
+		assertTrue(e.getMessage().contains("Page depth exceeds"), e.getMessage());
+		assertTrue(e.getCause() instanceof RestClientResponseException); // the original error is kept
+		assertTrue(sleeps.isEmpty()); // only 429 is retried
+	}
+
+	@Test
+	void turnsA5xxIntoAnException() {
+		server.expect(requestTo(URL)).andRespond(withServerError());
+
+		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
+
+		assertEquals("AniList returned HTTP 500", e.getMessage());
+		assertTrue(sleeps.isEmpty());
 	}
 
 	@Test

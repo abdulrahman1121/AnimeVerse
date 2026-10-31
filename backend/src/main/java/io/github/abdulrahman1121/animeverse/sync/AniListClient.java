@@ -16,6 +16,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import io.github.abdulrahman1121.animeverse.sync.AniListResponses.AiringPage;
 import io.github.abdulrahman1121.animeverse.sync.AniListResponses.AiringResponse;
@@ -37,6 +38,7 @@ public class AniListClient {
 	static final int MAX_ATTEMPTS = 3;                       // tries per request when rate limited
 	static final Duration DEFAULT_WAIT = Duration.ofSeconds(60);  // if AniList sends no Retry-After
 	static final Duration MAX_WAIT = Duration.ofSeconds(120);     // never sleep longer than this
+	private static final int MAX_BODY_IN_MESSAGE = 500;          // how much of an error response goes into the exception message
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
 	private static final Duration READ_TIMEOUT = Duration.ofSeconds(30);
 
@@ -169,7 +171,11 @@ public class AniListClient {
 		throw new AniListException("Still more results after " + MAX_PAGES + " pages; stopping to be safe");
 	}
 
-	/** POSTs one GraphQL request. On HTTP 429 (rate limited) it waits as long as AniList asks, then retries. */
+	/**
+	 * POSTs one GraphQL request. On HTTP 429 (rate limited) it waits as long as AniList asks, then retries.
+	 * Any other HTTP error (4xx or 5xx) is turned into an AniListException that carries AniList's own
+	 * explanation, so callers only ever deal with one exception type.
+	 */
 	private <R> R post(String query, Map<String, Object> variables, Class<R> responseType) {
 		Map<String, Object> body = Map.of("query", query, "variables", variables);
 		for (int attempt = 1;; attempt++) {
@@ -194,7 +200,24 @@ public class AniListClient {
 					throw new AniListException("Interrupted while waiting out the AniList rate limit", interrupted);
 				}
 			}
+			// Must come after the 429 handler: Java picks the first catch that matches, and
+			// TooManyRequests is also a RestClientResponseException. This covers every other
+			// 4xx (like 400 "page depth exceeds") and every 5xx (AniList is having a bad day).
+			catch (RestClientResponseException e) {
+				throw new AniListException(describe(e), e);
+			}
 		}
+	}
+
+	/** "AniList returned HTTP 400: ..." with the start of AniList's response body, which holds its reason. */
+	private static String describe(RestClientResponseException e) {
+		String message = "AniList returned HTTP " + e.getStatusCode().value();
+		String body = e.getResponseBodyAsString();
+		if (body == null || body.isBlank()) {
+			return message;
+		}
+		String shown = body.length() > MAX_BODY_IN_MESSAGE ? body.substring(0, MAX_BODY_IN_MESSAGE) + "..." : body;
+		return message + ": " + shown;
 	}
 
 	/** AniList sends "Retry-After: 60" (seconds) with a 429. Missing or unreadable: use the default. */
@@ -212,7 +235,7 @@ public class AniListClient {
 		}
 	}
 
-	/** GraphQL reports query mistakes as HTTP 200 with an "errors" list, so the status code alone isn't enough. */
+	/** Some GraphQL mistakes come back as HTTP 200 with an "errors" list, so the status code alone isn't enough. */
 	private static void failOnErrors(List<GraphQlError> errors) {
 		if (errors != null && !errors.isEmpty()) {
 			throw new AniListException("AniList returned errors: " + errors.stream().map(GraphQlError::message).toList());
