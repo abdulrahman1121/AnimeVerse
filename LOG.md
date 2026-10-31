@@ -18,13 +18,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ☐, a test that counts queries ☐
+- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ✅, a test that counts queries ☐
 - AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- Added `FeedController` with `GET /api/anime/airing`, `/finished` and `/upcoming`. Each calls the matching `FeedService` method and returns the cards as JSON. 4 MockMvc tests (fake service, no database): the JSON fields, one URL per section, `anilistId` and `syncedAt` never in the response, and 404 for an unknown URL. Checked against the real database with `curl`: newest premiere first, labels like "Ep 2 / ?" and "Fall 2026", unrated shows have a `null` score.
 - Added the feed's data layer. `AnimeRepository` has three JPQL queries (airing, finished since Jan 1, upcoming in the next 3 months), each loading a show's genres in the same query with `left join fetch`. `AiringEpisodeRepository.findMaxAiredEpisodes` returns the latest aired episode for a whole list of shows in one grouped query. `FeedService` builds the three card lists with 2 queries per section, however many cards. 3 integration tests. `YEAR_START` and `UPCOMING_MONTHS` in `AnimeSyncService` are now public so the sync and the feed share them.
 - Added the `feed/` package with `AnimeCard`, the record the API sends for one show, and `CardLabels`, which turns database values into display text ("Oct 4, 2026", "April 2027", "Fall 2026", "TV Short", "Ep 4 / 12", "Ep 1168 / ?"). The card leaves out internal fields like `anilistId`, and an unrated show has a `null` score so React shows NEW. 8 unit tests.
 - Merged PR #5 (the AniList sync: client, mapper, per-page transactions, episode sync, 3-hour scheduler).
@@ -64,6 +65,8 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Open (2026-10-31):** Many shows have `titleEnglish: null`, so the React card has to fall back to `titleRomaji` (and decide which title is the main one when both exist). That's a frontend decision for `feat/feed-ui`.
 
 - **Decided (2026-10-31):** The feed has **three endpoints**: `/api/anime/airing`, `/finished` and `/upcoming`. One failing doesn't affect the others, and each is a small query that's easy to test. The three requests run in parallel, and React should render each section whenever its data arrives, since no section is guaranteed to finish first.
 - **Decided (2026-10-31):** The API returns a **DTO record** (`AnimeCard`), not the entity. It carries only what the screen needs and keeps internal fields such as `anilistId` in the backend, and the backend does the computing (episodes, dates).
@@ -142,6 +145,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **A controller should only map a URL to a service call.** `@RestController` writes the returned objects into the HTTP response as JSON (Jackson turns the records into fields), and `@GetMapping` ties a URL to a method. With no logic inside, a MockMvc test can check the URLs and the JSON with a fake service, no server and no database, in milliseconds.
+- _2026-10-31:_ **Test what must never leak, not just what must appear.** One test asserts that `anilistId` and `syncedAt` are absent from the JSON, so a future change to the DTO can't expose them by accident.
+- _2026-10-31:_ **Look at the real output once.** The unit tests use a fake, so only `curl` against my real database showed the whole path working: the JPQL queries, the ordering, the labels and the nulls on real shows.
 
 - _2026-10-31:_ **`left join fetch` loads a parent and its children in one query.** The result has one row per genre, and Hibernate merges the repeated rows back into one `Anime`. "Left" keeps shows with no genres, which an inner join would drop. I check it with a show that has two genres: it must appear once.
 - _2026-10-31:_ **A grouped query answers "for each show" in one trip.** `select anime_id, max(episode) ... where anime_id in (...) group by anime_id` replaces one query per card. Shows with no matching row are just missing from the result, so the code treats a missing entry as "nothing to show".
