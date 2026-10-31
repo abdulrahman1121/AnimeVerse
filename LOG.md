@@ -18,17 +18,16 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ☐, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ☐, a test that counts queries ☐
+- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ☐, a test that counts queries ☐
 - AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- Added the feed's data layer. `AnimeRepository` has three JPQL queries (airing, finished since Jan 1, upcoming in the next 3 months), each loading a show's genres in the same query with `left join fetch`. `AiringEpisodeRepository.findMaxAiredEpisodes` returns the latest aired episode for a whole list of shows in one grouped query. `FeedService` builds the three card lists with 2 queries per section, however many cards. 3 integration tests. `YEAR_START` and `UPCOMING_MONTHS` in `AnimeSyncService` are now public so the sync and the feed share them.
 - Added the `feed/` package with `AnimeCard`, the record the API sends for one show, and `CardLabels`, which turns database values into display text ("Oct 4, 2026", "April 2027", "Fall 2026", "TV Short", "Ep 4 / 12", "Ep 1168 / ?"). The card leaves out internal fields like `anilistId`, and an unrated show has a `null` score so React shows NEW. 8 unit tests.
 - Merged PR #5 (the AniList sync: client, mapper, per-page transactions, episode sync, 3-hour scheduler).
-
-### 2026-10-31
 - `AniListClient` now retries failures that might fix themselves, up to 3 attempts in total: timeouts and connection problems, and HTTP 502/503/504, wait 5 s then 10 s (exponential backoff); 429 still waits for `Retry-After`. Other errors (other 4xx, a plain 500, unreadable JSON) fail right away. Everything leaves the client as an `AniListException`. Pulled the waiting into a `pause` method. 5 new tests.
 - `AniListClient` now turns every HTTP error other than 429 (any 4xx or 5xx) into an `AniListException` whose message has the status code and the start of AniList's own response body, with the original error kept as the cause. The 400 from the 5,000-entry limit would now read "AniList returned HTTP 400: ...Page depth exceeds maximum allowed...". 2 new tests (400 and 500).
 - Fixed the episode sync hitting AniList's 5,000-entry limit: `EpisodeSyncService` now fetches the year in 30-day windows (about 11 of them right now), saves each window page by page, and counts a failed window download in a new `failedWindows` field without stopping the others. 4 unit tests, including no gaps or overlaps between windows. Checked against the real AniList and it works.
@@ -143,6 +142,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **`left join fetch` loads a parent and its children in one query.** The result has one row per genre, and Hibernate merges the repeated rows back into one `Anime`. "Left" keeps shows with no genres, which an inner join would drop. I check it with a show that has two genres: it must appear once.
+- _2026-10-31:_ **A grouped query answers "for each show" in one trip.** `select anime_id, max(episode) ... where anime_id in (...) group by anime_id` replaces one query per card. Shows with no matching row are just missing from the result, so the code treats a missing entry as "nothing to show".
+- _2026-10-31:_ **Tests that share a database with real data must only judge their own rows.** My feed tests name their shows "Test Feed ..." and compare order only among those, so the 816 real shows can't break them.
 
 - _2026-10-31:_ **A DTO is a contract.** An entity mirrors the database; a DTO (data transfer object) is the shape I promise the frontend. Returning an entity leaks internal columns, and with `open-in-view=false` it also fails when lazy data (genres) is read after the transaction ends. A record is a small, immutable class that makes a DTO cheap to write.
 - _2026-10-31:_ **The N+1 problem** is 1 query for the list plus 1 more per card, so 60 cards with genres and episodes is 121 queries instead of 2, and each query is a network trip to the database. It hides on a laptop and hurts on bigger data or a slower network. Batching fixes it, and a test that counts queries keeps it from coming back.

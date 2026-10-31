@@ -24,10 +24,10 @@ public class AnimeSyncService {
 
 	private static final Logger log = LoggerFactory.getLogger(AnimeSyncService.class);
 
-	/** V1 is "This Year in Anime", starting here. */
-	static final LocalDate YEAR_START = LocalDate.of(2026, 1, 1);
+	/** V1 is "This Year in Anime", starting here. Public: the feed reads the same constants, so the two can't drift apart. */
+	public static final LocalDate YEAR_START = LocalDate.of(2026, 1, 1);
 	/** "Upcoming" means roughly the next season. */
-	static final int UPCOMING_MONTHS = 3;
+	public static final int UPCOMING_MONTHS = 3;
 
 	public record SyncReport(int fetched, int saved, int skipped, int failedPages) {
 	}

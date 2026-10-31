@@ -1,6 +1,8 @@
 package io.github.abdulrahman1121.animeverse.anime;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -22,4 +24,19 @@ public interface AiringEpisodeRepository extends JpaRepository<AiringEpisode, Lo
 	 */
 	@Query("select max(e.episode) from AiringEpisode e where e.anime.id = :animeId and e.airingAt <= :moment")
 	Optional<Short> findMaxAiredEpisode(@Param("animeId") Long animeId, @Param("moment") Instant moment);
+
+	/**
+	 * The same "highest aired episode", for MANY shows in one query: one row per show that has at
+	 * least one aired episode (shows with none are simply missing from the result). The feed uses
+	 * this once per section instead of asking once per card.
+	 *
+	 * "select new ..." builds a MaxAiredEpisode record straight from each row.
+	 */
+	@Query("""
+			select new io.github.abdulrahman1121.animeverse.anime.MaxAiredEpisode(e.anime.id, max(e.episode))
+			from AiringEpisode e
+			where e.anime.id in :animeIds and e.airingAt <= :moment
+			group by e.anime.id
+			""")
+	List<MaxAiredEpisode> findMaxAiredEpisodes(@Param("animeIds") Collection<Long> animeIds, @Param("moment") Instant moment);
 }
