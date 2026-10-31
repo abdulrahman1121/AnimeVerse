@@ -18,10 +18,15 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ✅, handle timeouts and retry transient failures ✅, then the PR ☐
+- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ☐, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ☐, a test that counts queries ☐
+- AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
+
+### 2026-10-31
+- Added the `feed/` package with `AnimeCard`, the record the API sends for one show, and `CardLabels`, which turns database values into display text ("Oct 4, 2026", "April 2027", "Fall 2026", "TV Short", "Ep 4 / 12", "Ep 1168 / ?"). The card leaves out internal fields like `anilistId`, and an unrated show has a `null` score so React shows NEW. 8 unit tests.
+- Merged PR #5 (the AniList sync: client, mapper, per-page transactions, episode sync, 3-hour scheduler).
 
 ### 2026-10-31
 - `AniListClient` now retries failures that might fix themselves, up to 3 attempts in total: timeouts and connection problems, and HTTP 502/503/504, wait 5 s then 10 s (exponential backoff); 429 still waits for `Retry-After`. Other errors (other 4xx, a plain 500, unreadable JSON) fail right away. Everything leaves the client as an `AniListException`. Pulled the waiting into a `pause` method. 5 new tests.
@@ -60,6 +65,14 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (2026-10-31):** The feed has **three endpoints**: `/api/anime/airing`, `/finished` and `/upcoming`. One failing doesn't affect the others, and each is a small query that's easy to test. The three requests run in parallel, and React should render each section whenever its data arrives, since no section is guaranteed to finish first.
+- **Decided (2026-10-31):** The API returns a **DTO record** (`AnimeCard`), not the entity. It carries only what the screen needs and keeps internal fields such as `anilistId` in the backend, and the backend does the computing (episodes, dates).
+- **Decided (2026-10-31):** The backend sends **ready-made display text** (dates, season, format, episodes) and React just prints it. Dates match their precision: "Oct 4, 2026", "April 2027", "2027". I also extended that to the season, format and episode text.
+- **Decided (2026-10-31):** **No pagination** in V1. The real counts are 217 airing, 436 finished and 163 upcoming (816 in total, matching the sync), so a section is at most about 240 KB of JSON (an estimate). The cover images are the real cost, so React uses lazy loading.
+- **Decided (2026-10-31):** Genres and episodes are fetched in **batches** (Hibernate `join fetch` for genres, one grouped query for the episode numbers), not one query per card. `join fetch` on a collection would force in-memory paging, which doesn't matter while there's no pagination. If I paginate later, I'll need a different approach.
+- **Open (2026-10-31):** The start of the year is a hard-coded constant (`2026-01-01`), so in 2027 "Finished this year" would keep growing instead of resetting. It needs updating then.
+- **Open (2026-10-31):** "Upcoming" only includes shows whose start date is today or later and inside the next 3 months. A show stuck as NOT_YET_RELEASED with a start date that has passed would vanish from every section.
 
 - **Decided (Oct 31):** AniList requests get **3 attempts in total**, so at most 2 waits (5 s, then 10 s) and none after the last try. 429 uses AniList's `Retry-After`. Only errors that might clear up by themselves are retried: timeouts, connection problems, 502, 503, 504. A plain 500 and other 4xx are not, because repeating them would give the same result. Retrying is safe because these requests only read data. Worst case: a dead request can cost about 1.5 minutes (three 30 s read timeouts) plus the waits.
 
@@ -130,6 +143,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **A DTO is a contract.** An entity mirrors the database; a DTO (data transfer object) is the shape I promise the frontend. Returning an entity leaks internal columns, and with `open-in-view=false` it also fails when lazy data (genres) is read after the transaction ends. A record is a small, immutable class that makes a DTO cheap to write.
+- _2026-10-31:_ **The N+1 problem** is 1 query for the list plus 1 more per card, so 60 cards with genres and episodes is 121 queries instead of 2, and each query is a network trip to the database. It hides on a laptop and hurts on bigger data or a slower network. Batching fixes it, and a test that counts queries keeps it from coming back.
+- _2026-10-31:_ **Check each design choice for what it rules out.** `join fetch` on a collection is incompatible with database-level pagination, so my "no pagination" decision and my fetching decision depend on each other.
 
 - _2026-10-31:_ **Retry only what can change.** A timeout or a 503 may work a few seconds later; a 400 for a bad query never will. Waiting longer each time (exponential backoff: 5 s, 10 s) avoids hammering a service that is already struggling, like waiting longer before redialing a busy line. Order the `catch` blocks from most specific to most general (429, then no response, then other HTTP errors, then anything else); Java refuses to compile a general class before its subclass.
 
