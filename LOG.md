@@ -18,12 +18,13 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, fix the airing-schedule download hitting AniList's 5,000-entry limit (fetch the year in smaller time windows) ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ☐, then the PR ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- Fixed the episode sync hitting AniList's 5,000-entry limit: `EpisodeSyncService` now fetches the year in 30-day windows (about 11 of them right now), saves each window page by page, and counts a failed window download in a new `failedWindows` field without stopping the others. 4 unit tests, including no gaps or overlaps between windows. Checked against the real AniList and it works.
 - Wrote `SyncJob`: runs the show sync, then the episode sync, with `@Scheduled(fixedDelay)` every 3 hours and once when the app starts, in the background. If the show sync fails, the episode sync is skipped for that run. Added `animeverse.sync.enabled` and `animeverse.sync.interval` to `application.properties`, and a test config (`src/test/resources/config/application.properties`) that turns the job off so tests never call AniList. 3 unit tests.
 - First real run: the show sync fetched and saved 816 shows with 0 skipped and 0 failed pages. The episode sync then failed with a 400 from AniList: the whole-year schedule is more than 5,000 entries, over AniList's limit. The job logged it and carried on, and the shows were not affected. Fix is the next commit.
 - Wrote `EpisodeSyncService` and `AiringEpisodePageSaver`: fetch the airing schedule for the whole year so far plus two weeks ahead, save it in pages of 50 (one transaction per page), keep only episodes of shows I already track, and update the air time if AniList reschedules an episode. 2 unit tests and 3 integration tests.
@@ -57,6 +58,10 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 31):** The airing schedule is fetched in **30-day windows**, each saved right after its download. Each window is a separate query, so the 5,000 limit never applies. The windows are half-open and each asks from one second early, because AniList's time bounds are exclusive: nothing is missed and nothing is fetched twice.
+- **Decided (Oct 31):** If one window's download fails, it is **logged, counted in `failedWindows` and skipped**, and the other windows still run. The windows are independent, so one bad month shouldn't throw away the rest of the year. Aborting on the first failure would be simpler but could leave the other months stale for good.
+- **Open (Oct 31):** The episode sync is much slower than the show sync: about 11 windows, each with many pages, and each page is a separate request to AniList. It's fine every 3 hours, but if it ever becomes a problem I could ask AniList only for my shows (`mediaId_in`) so I stop downloading rows I throw away.
 
 - **Decided (Oct 31):** The sync uses **`fixedDelay`**: the next run starts 3 hours after the previous one finishes, so two runs can never overlap. A fixed rate would keep the clock times predictable but needs a guard of my own to avoid overlap. The drift is small because a run should rarely take long.
 - **Decided (Oct 31):** The startup sync **runs in the background**. If the app waited for the sync, it wouldn't accept any connections until it finished, so users would see "can't connect". Refreshing the page can't restart a sync: only the timer and app startup trigger it, and page requests only read my database.
@@ -118,6 +123,9 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **Slicing a big query by time is a standard way around a pagination cap.** The limit applies per query, so smaller queries each stay under it. The details that matter are half-open windows (each starts exactly where the last ended) and, because AniList's bounds are exclusive, nudging the lower bound by one second so a boundary episode is neither lost nor duplicated.
+- _2026-10-31:_ **Time cost follows the number of requests.** The episode sync is much slower than the show sync because it makes far more requests (around 11 windows times many pages each), and every request pays for a network round trip. Saving to my own database is cheap by comparison.
 
 - _2026-10-31:_ **Measure, don't estimate.** I guessed 3,000 to 4,000 airing rows for the year. The real number is over 5,000 because AniList's schedule covers every anime, not just mine. The 5,000 cap on any single query (page times perPage) shows up as an HTTP **400** error for this case, not the HTTP 200 with an `errors` list I assumed. Always log real counts on the first run.
 - _2026-10-31:_ **What rolls back and what doesn't.** A bad show is skipped (the mapper rejects it before the database). Only a real database error rolls back a page, and a page is only the 50 rows of that sync step. The show sync and episode sync are separate: committed shows can't be undone by an episode failure. A failed download aborts that sync before anything is saved.

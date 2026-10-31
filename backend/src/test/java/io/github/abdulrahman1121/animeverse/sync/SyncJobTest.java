@@ -42,7 +42,7 @@ class SyncJobTest {
 			if (fail) {
 				throw new IllegalStateException("simulated failure");
 			}
-			return new SyncReport(0, 0, 0, 0);
+			return new SyncReport(0, 0, 0, 0, 0);
 		}
 	}
 
