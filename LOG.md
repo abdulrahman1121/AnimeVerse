@@ -18,10 +18,14 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ☐, 3-hour schedule ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
+
+### 2026-10-31
+- Wrote `EpisodeSyncService` and `AiringEpisodePageSaver`: fetch the airing schedule for the whole year so far plus two weeks ahead, save it in pages of 50 (one transaction per page), keep only episodes of shows I already track, and update the air time if AniList reschedules an episode. 2 unit tests and 3 integration tests.
+- Replaced the aired-episode count query with `findMaxAiredEpisode`, a JPQL `@Query` returning the highest episode number that has aired. Updated `AnimeRepositoryTest` to match.
 
 ### 2026-10-26
 - Wrote `AnimePageSaver` and `AnimeSyncService`. The service fetches the releasing, finished-this-year and upcoming lists, merges them by AniList id, cuts them into pages of 50, and saves each page in its own transaction. Shows are inserted or updated, and genres are mirrored from AniList. 3 unit tests (hand-written fakes) and 3 integration tests against Postgres.
@@ -51,6 +55,10 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 31):** The episode sync fetches **the whole year (Jan 1, 2026 to two weeks ahead)** on every run, not just a recent window. Airing shows rarely have a long episode history now and finished shows barely pass 25 episodes, so the volume is small, and one rule works for every run with no separate first-time backfill. I'll log the real request count on the first run to check that.
+- **Decided (Oct 31):** Episodes are saved **only for shows already in my anime table**. AniList's schedule covers every anime, so rows for other shows are skipped. This also means the episode sync must run after the show sync, and if the show sync fails, the episode sync is **skipped for that run**: no show, no saved episode, and the next run catches up.
+- **Decided (Oct 31):** The window is a time range, not "from the beginning". A long runner like One Piece only gets the ~40 episodes that aired inside it, which is why "Ep X" uses the highest aired episode number (`MAX`) and not a row count.
 
 - **Decided (Oct 26):** Each page of up to 50 shows is saved in **one transaction per page**. A database error rolls back only that page and the next sync retries it. One transaction per show would lose less on an error but means far more commits, and per-page is the usual best practice.
 - **Decided (Oct 26):** The page saver is its **own Spring bean**. `@Transactional` works through a proxy, so a method calling another method on its own class would skip it. The sync service has no transaction itself, so none stays open while waiting on the network.
@@ -103,6 +111,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **`COUNT` vs `MAX` depends on what's stored.** Because I only store this year's episodes, counting rows would show One Piece as "Ep 40". The highest aired episode number shows the real "Ep 1168". Pick the aggregate that matches what the data actually holds.
+- _2026-10-31:_ **`@Query` and JPQL.** Spring Data can build a query from a method name, but not something like `max`. A `@Query` takes JPQL, which names the Java entity and its fields (`AiringEpisode`, `e.airingAt`), not the table and columns. An aggregate over zero rows returns null, which Spring turns into `Optional.empty()`.
+- _2026-10-31:_ **A bulk fetch returns more than I keep.** AniList's schedule query covers every anime, so many rows belong to shows I don't track. Look each show up once per page and skip the rest, so the cost scales with the page, not with every row.
 
 - _2026-10-26:_ **A transaction is "all or nothing"**, like a bank transfer where both the withdrawal and the deposit happen or neither does. Each commit costs a disk-safety write, so I group shows into pages of 50 and commit once per page, not once per show. A **page** is just a chunk of the fetched list; one sync of about 250 shows is about 5 pages and 5 commits.
 - _2026-10-26:_ **A proxy is a stand-in object in front of the real one**, like a receptionist who writes "call started" before putting me through and "call finished" after. Spring wraps `@Transactional` beans in one to open and commit the transaction. Calling a method on my own class skips the receptionist, so no transaction opens. That's why the saver is its own class.

@@ -30,7 +30,7 @@ class AnimeRepositoryTest {
 	@Autowired EntityManager entityManager;
 
 	@Test
-	void savesAnimeWithGenresAndCountsAiredEpisodes() {
+	void savesAnimeWithGenresAndFindsHighestAiredEpisode() {
 		Instant now = Instant.now();
 		Genre action = genreRepository.save(new Genre("Test Action"));
 		Genre fantasy = genreRepository.save(new Genre("Test Fantasy"));
@@ -54,7 +54,8 @@ class AnimeRepositoryTest {
 		Anime loaded = animeRepository.findByAnilistId(999_001).orElseThrow();
 		Set<String> genreNames = loaded.getGenres().stream().map(Genre::getName).collect(Collectors.toSet());
 		assertEquals(Set.of("Test Action", "Test Fantasy"), genreNames);
-		assertEquals(3, episodeRepository.countByAnimeIdAndAiringAtLessThanEqual(loaded.getId(), now));
+		// episodes 1 to 3 have aired, episode 4 is in the future, so "Ep X" is 3
+		assertEquals((short) 3, episodeRepository.findMaxAiredEpisode(loaded.getId(), now).orElseThrow());
 	}
 
 	@Test
@@ -73,8 +74,8 @@ class AnimeRepositoryTest {
 		entityManager.flush();
 
 		assertTrue(animeRepository.findByAnilistId(999_002).isEmpty());
-		// ON DELETE CASCADE removed the episode (count only this show's rows, so real synced data can't interfere)
-		assertEquals(0, episodeRepository.countByAnimeIdAndAiringAtLessThanEqual(animeId, Instant.parse("2100-01-01T00:00:00Z")));
+		// ON DELETE CASCADE removed the episode (looks at only this show's rows, so real synced data can't interfere)
+		assertTrue(episodeRepository.findMaxAiredEpisode(animeId, Instant.parse("2100-01-01T00:00:00Z")).isEmpty());
 		assertTrue(genreRepository.findByName("Test Action").isPresent()); // the genre itself stays
 	}
 }
