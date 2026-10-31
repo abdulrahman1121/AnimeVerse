@@ -18,12 +18,13 @@ Ideas, features, and work we've agreed to do but haven't started.
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ✅, handle timeouts and retry transient failures ☐, then the PR ☐
+- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ✅, handle timeouts and retry transient failures ✅, then the PR ☐
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-10-31
+- `AniListClient` now retries failures that might fix themselves, up to 3 attempts in total: timeouts and connection problems, and HTTP 502/503/504, wait 5 s then 10 s (exponential backoff); 429 still waits for `Retry-After`. Other errors (other 4xx, a plain 500, unreadable JSON) fail right away. Everything leaves the client as an `AniListException`. Pulled the waiting into a `pause` method. 5 new tests.
 - `AniListClient` now turns every HTTP error other than 429 (any 4xx or 5xx) into an `AniListException` whose message has the status code and the start of AniList's own response body, with the original error kept as the cause. The 400 from the 5,000-entry limit would now read "AniList returned HTTP 400: ...Page depth exceeds maximum allowed...". 2 new tests (400 and 500).
 - Fixed the episode sync hitting AniList's 5,000-entry limit: `EpisodeSyncService` now fetches the year in 30-day windows (about 11 of them right now), saves each window page by page, and counts a failed window download in a new `failedWindows` field without stopping the others. 4 unit tests, including no gaps or overlaps between windows. Checked against the real AniList and it works.
 - Wrote `SyncJob`: runs the show sync, then the episode sync, with `@Scheduled(fixedDelay)` every 3 hours and once when the app starts, in the background. If the show sync fails, the episode sync is skipped for that run. Added `animeverse.sync.enabled` and `animeverse.sync.interval` to `application.properties`, and a test config (`src/test/resources/config/application.properties`) that turns the job off so tests never call AniList. 3 unit tests.
@@ -59,6 +60,8 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (Oct 31):** AniList requests get **3 attempts in total**, so at most 2 waits (5 s, then 10 s) and none after the last try. 429 uses AniList's `Retry-After`. Only errors that might clear up by themselves are retried: timeouts, connection problems, 502, 503, 504. A plain 500 and other 4xx are not, because repeating them would give the same result. Retrying is safe because these requests only read data. Worst case: a dead request can cost about 1.5 minutes (three 30 s read timeouts) plus the waits.
 
 - **Decided (Oct 31):** Both **4xx and 5xx** responses from AniList become an `AniListException` with AniList's own message (the first 500 characters of the body), so the log explains the failure and I only handle one exception type. The original Spring exception stays as the cause for the full stack trace.
 - **Decided (Oct 31):** Timeouts, connection failures and **transient** errors (502, 503, 504) will be **retried with exponential backoff** (up to 3 attempts, waiting 5 s then 10 s), sharing the attempt counter with the 429 retries. Errors that would fail the same way every time (other 4xx) are never retried. That's the next commit.
@@ -127,6 +130,8 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-10-31:_ **Retry only what can change.** A timeout or a 503 may work a few seconds later; a 400 for a bad query never will. Waiting longer each time (exponential backoff: 5 s, 10 s) avoids hammering a service that is already struggling, like waiting longer before redialing a busy line. Order the `catch` blocks from most specific to most general (429, then no response, then other HTTP errors, then anything else); Java refuses to compile a general class before its subclass.
 
 - _2026-10-31:_ **Java uses the first `catch` that matches, so order matters.** The 429 handler has to come before the general HTTP-error handler, because `TooManyRequests` is also a `RestClientResponseException`. Put the general one first and the retries would silently stop working. The existing retry tests are what would catch that mistake.
 - _2026-10-31:_ **A good error message says what the other side said.** The first time the 5,000 limit failed, I got a raw stack trace. Including the start of AniList's response body in the exception turns that into a one-line reason I can act on, and keeping the original exception as the cause means nothing is lost.

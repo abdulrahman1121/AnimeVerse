@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -24,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.http.client.MockClientHttpRequest;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.RequestMatcher;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -155,6 +159,66 @@ class AniListClientTest {
 		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
 
 		assertEquals("AniList returned HTTP 500", e.getMessage());
+		assertTrue(sleeps.isEmpty());
+	}
+
+	@Test
+	void retriesATimeoutAfterABackoffAndThenSucceeds() {
+		server.expect(requestTo(URL)).andRespond(withException(new SocketTimeoutException("Read timed out")));
+		server.expect(requestTo(URL))
+				.andRespond(withSuccess(mediaPage(false, media(1)), MediaType.APPLICATION_JSON));
+
+		assertEquals(1, client.fetchReleasing().size());
+		assertEquals(List.of(Duration.ofSeconds(5)), sleeps);
+		server.verify();
+	}
+
+	@Test
+	void retriesServerOverloadWithGrowingWaits() {
+		server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+		server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.BAD_GATEWAY));
+		server.expect(requestTo(URL))
+				.andRespond(withSuccess(mediaPage(false, media(1)), MediaType.APPLICATION_JSON));
+
+		assertEquals(1, client.fetchReleasing().size());
+		assertEquals(List.of(Duration.ofSeconds(5), Duration.ofSeconds(10)), sleeps); // doubles each time
+		server.verify();
+	}
+
+	@Test
+	void givesUpAfterMaxAttemptsOnTimeouts() {
+		for (int i = 0; i < AniListClient.MAX_ATTEMPTS; i++) {
+			server.expect(requestTo(URL)).andRespond(withException(new IOException("Connection reset")));
+		}
+
+		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
+
+		assertTrue(e.getMessage().contains("Could not reach AniList after 3 attempts"), e.getMessage());
+		assertTrue(e.getCause() instanceof ResourceAccessException);
+		assertEquals(List.of(Duration.ofSeconds(5), Duration.ofSeconds(10)), sleeps); // no wait after the last try
+		server.verify();
+	}
+
+	@Test
+	void givesUpAfterMaxAttemptsOnServerOverload() {
+		for (int i = 0; i < AniListClient.MAX_ATTEMPTS; i++) {
+			server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.GATEWAY_TIMEOUT));
+		}
+
+		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
+
+		assertTrue(e.getMessage().contains("HTTP 504"), e.getMessage());
+		assertEquals(AniListClient.MAX_ATTEMPTS - 1, sleeps.size());
+		server.verify();
+	}
+
+	@Test
+	void anUnreadableResponseBecomesAnExceptionAndIsNotRetried() {
+		server.expect(requestTo(URL)).andRespond(withSuccess("this is not json", MediaType.APPLICATION_JSON));
+
+		AniListException e = assertThrows(AniListException.class, client::fetchReleasing);
+
+		assertTrue(e.getMessage().contains("could not be read"), e.getMessage());
 		assertTrue(sleeps.isEmpty());
 	}
 

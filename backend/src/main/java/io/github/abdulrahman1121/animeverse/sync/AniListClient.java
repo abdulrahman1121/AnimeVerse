@@ -15,7 +15,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import io.github.abdulrahman1121.animeverse.sync.AniListResponses.AiringPage;
@@ -38,6 +40,7 @@ public class AniListClient {
 	static final int MAX_ATTEMPTS = 3;                       // tries per request when rate limited
 	static final Duration DEFAULT_WAIT = Duration.ofSeconds(60);  // if AniList sends no Retry-After
 	static final Duration MAX_WAIT = Duration.ofSeconds(120);     // never sleep longer than this
+	static final Duration BACKOFF = Duration.ofSeconds(5);        // first wait after a transient failure; doubles each time
 	private static final int MAX_BODY_IN_MESSAGE = 500;          // how much of an error response goes into the exception message
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
 	private static final Duration READ_TIMEOUT = Duration.ofSeconds(30);
@@ -172,9 +175,17 @@ public class AniListClient {
 	}
 
 	/**
-	 * POSTs one GraphQL request. On HTTP 429 (rate limited) it waits as long as AniList asks, then retries.
-	 * Any other HTTP error (4xx or 5xx) is turned into an AniListException that carries AniList's own
-	 * explanation, so callers only ever deal with one exception type.
+	 * POSTs one GraphQL request and retries the failures that might go away by themselves, up to
+	 * MAX_ATTEMPTS tries in total:
+	 *
+	 *   - HTTP 429 (rate limited): wait as long as AniList's Retry-After header asks.
+	 *   - A timeout or connection problem, or HTTP 502/503/504 (AniList's servers are struggling):
+	 *     wait 5 seconds, then 10 (exponential backoff: the wait doubles each time).
+	 *
+	 * Everything else fails right away, because trying again can't change the result: other 4xx
+	 * errors, other 5xx errors, and a response we can't read. Every failure leaves this method
+	 * as an AniListException, so callers deal with one exception type. Repeating is safe here
+	 * because these requests only read data.
 	 */
 	private <R> R post(String query, Map<String, Object> variables, Class<R> responseType) {
 		Map<String, Object> body = Map.of("query", query, "variables", variables);
@@ -188,24 +199,53 @@ public class AniListClient {
 						.retrieve()
 						.body(responseType);
 			}
+			// Java uses the FIRST catch that matches, so the order is most specific to most general:
+			// TooManyRequests is a RestClientResponseException, which is a RestClientException.
 			catch (HttpClientErrorException.TooManyRequests e) {
 				if (attempt == MAX_ATTEMPTS) {
 					throw new AniListException("AniList rate limit hit " + MAX_ATTEMPTS + " times in a row", e);
 				}
-				try {
-					sleeper.sleep(retryAfter(e));
-				}
-				catch (InterruptedException interrupted) {
-					Thread.currentThread().interrupt(); // keep the "stop" signal alive for whoever interrupted us
-					throw new AniListException("Interrupted while waiting out the AniList rate limit", interrupted);
-				}
+				pause(retryAfter(e));
 			}
-			// Must come after the 429 handler: Java picks the first catch that matches, and
-			// TooManyRequests is also a RestClientResponseException. This covers every other
-			// 4xx (like 400 "page depth exceeds") and every 5xx (AniList is having a bad day).
+			catch (ResourceAccessException e) {
+				// No HTTP response at all: a timeout, a refused or dropped connection, no network.
+				if (attempt == MAX_ATTEMPTS) {
+					throw new AniListException("Could not reach AniList after " + MAX_ATTEMPTS
+							+ " attempts (timeout or connection problem): " + e.getMessage(), e);
+				}
+				pause(backoff(attempt));
+			}
 			catch (RestClientResponseException e) {
-				throw new AniListException(describe(e), e);
+				if (!isTransient(e) || attempt == MAX_ATTEMPTS) {
+					throw new AniListException(describe(e), e);
+				}
+				pause(backoff(attempt));
 			}
+			catch (RestClientException e) {
+				// Whatever is left, mostly a response that arrived but couldn't be read (broken JSON).
+				throw new AniListException("AniList's response could not be read: " + e.getMessage(), e);
+			}
+		}
+	}
+
+	/** 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout: the server is overloaded or restarting. */
+	private static boolean isTransient(RestClientResponseException e) {
+		int status = e.getStatusCode().value();
+		return status == 502 || status == 503 || status == 504;
+	}
+
+	/** 5 seconds after the first failure, 10 after the second, 20 after the third... */
+	private static Duration backoff(int attempt) {
+		return BACKOFF.multipliedBy(1L << (attempt - 1));
+	}
+
+	private void pause(Duration duration) {
+		try {
+			sleeper.sleep(duration);
+		}
+		catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt(); // keep the "stop" signal alive for whoever interrupted us
+			throw new AniListException("Interrupted while waiting to retry an AniList request", interrupted);
 		}
 	}
 
