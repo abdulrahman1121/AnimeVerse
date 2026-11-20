@@ -14,15 +14,19 @@ Ideas, features, and work we've agreed to do but haven't started.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `frontend/` (React)
+- [ ] Add the `architecture/` folder (README, `data-flow.md` with Mermaid diagrams, `changes.md`) on its own `docs/` branch, right after `feat/feed-api` is pushed and merged. Mark everything `built` or `planned`.
 
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ✅, a test that counts queries ☐
+- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ✅, a test that counts queries ✅. Next: push the branch, open the PR (squash merge)
 - AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
+
+### 2026-11-20
+- Added `FeedQueryCountTest`, a guard for my batching decision. It seeds 30 shows per section (3 genres and 2 aired episodes each), turns on Hibernate's statistics, and asserts that `airing`, `finished` and `upcoming` each cost exactly 2 SQL statements. A fourth test does a deliberate N+1 (look up each show, then touch its genres) and asserts the counter sees at least 60 statements, to prove the counter measures something. The full suite passes (66 tests, 0 failures) with Postgres running in Docker.
 
 ### 2026-10-31
 - Added `FeedController` with `GET /api/anime/airing`, `/finished` and `/upcoming`. Each calls the matching `FeedService` method and returns the cards as JSON. 4 MockMvc tests (fake service, no database): the JSON fields, one URL per section, `anilistId` and `syncedAt` never in the response, and 404 for an unknown URL. Checked against the real database with `curl`: newest premiere first, labels like "Ep 2 / ?" and "Fall 2026", unrated shows have a `null` score.
@@ -145,6 +149,9 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-11-20:_ **A guard test should be seen failing.** The query-count test asserts "exactly 2 statements", but a number that is always 2 could also mean the counter is broken. The deliberate N+1 test shows the counter really goes up when the code does it the slow way. Hibernate's `generate_statistics` counts every statement it prepares, so the assertion fails the moment someone adds a lazy lookup per card.
+- _2026-11-20:_ **Docker must be running for the integration tests.** Docker Desktop was paused, so the `@SpringBootTest` classes had nowhere to connect. The unit tests (fakes, MockMvc) don't need it, which is why only some tests fail without Docker.
 
 - _2026-10-31:_ **A controller should only map a URL to a service call.** `@RestController` writes the returned objects into the HTTP response as JSON (Jackson turns the records into fields), and `@GetMapping` ties a URL to a method. With no logic inside, a MockMvc test can check the URLs and the JSON with a fake service, no server and no database, in milliseconds.
 - _2026-10-31:_ **Test what must never leak, not just what must appear.** One test asserts that `anilistId` and `syncedAt` are absent from the JSON, so a future change to the DTO can't expose them by accident.
