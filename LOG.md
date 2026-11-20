@@ -14,18 +14,20 @@ Ideas, features, and work we've agreed to do but haven't started.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `frontend/` (React)
-- [ ] Add the `architecture/` folder (README, `data-flow.md` with Mermaid diagrams, `changes.md`) on its own `docs/` branch, right after `feat/feed-api` is pushed and merged. Mark everything `built` or `planned`.
 
 ## 🚧 In Progress
 What's being worked on right now.
 
-- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ✅, a test that counts queries ✅. Next: push the branch, open the PR (squash merge)
+- Architecture docs (branch `docs/architecture`): `architecture/README.md` ✅, `data-flow.md` with 8 Mermaid diagrams ✅ (all render), `changes.md` ✅. I'm double-checking them myself before the commit and PR.
+- Feed API: done and merged (PR #6).
 - AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
 ### 2026-11-20
+- Wrote the `architecture/` folder on `docs/architecture`: an index (`README.md`), `data-flow.md` and a dated `changes.md`. `data-flow.md` has 8 Mermaid diagrams (system overview, the sync run, saving a page of shows and of episodes, one AniList request with its retries, one feed request, how a show moves between feed sections, and the data model), plus tables for who reads and writes what and for what happens when something fails. Everything is marked built or planned, and each diagram was checked against the code. I rendered all 8 with a real Mermaid renderer, and a deliberately broken diagram was rejected, so the check works.
+- Merged PR #6 (the feed API: DTO, queries and service, three endpoints, and the query-count test).
 - Added `FeedQueryCountTest`, a guard for my batching decision. It seeds 30 shows per section (3 genres and 2 aired episodes each), turns on Hibernate's statistics, and asserts that `airing`, `finished` and `upcoming` each cost exactly 2 SQL statements. A fourth test does a deliberate N+1 (look up each show, then touch its genres) and asserts the counter sees at least 60 statements, to prove the counter measures something. The full suite passes (66 tests, 0 failures) with Postgres running in Docker.
 
 ### 2026-10-31
@@ -69,6 +71,11 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Decided (2026-11-20):** The `architecture/` folder was written **after** the feed API merged, on its own `docs/architecture` branch, so the diagrams describe what is really built. I chose not to type a piece of it myself and to double-check it afterward.
+- **Open (2026-11-20):** There is **no CORS configuration**. A React dev server on another origin will be blocked by the browser when it calls the API. `feat/feed-ui` has to settle it (for example a dev proxy or a CORS setting), and I haven't picked one.
+- **Open (2026-11-20):** There is **no custom error handler**. If Postgres is down during a feed request, Spring's default HTTP 500 comes back. Fine for now, but I should decide what the feed returns when it fails.
+- **Open (2026-11-20):** Nothing records or shows whether the last sync worked, or how old the data is. Only the log has it.
 
 - **Open (2026-10-31):** Many shows have `titleEnglish: null`, so the React card has to fall back to `titleRomaji` (and decide which title is the main one when both exist). That's a frontend decision for `feat/feed-ui`.
 
@@ -149,6 +156,10 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-11-20:_ **Writing the failure table finds the gaps.** To fill in "what happens when Postgres is down" I had to look, and found no error handler and no CORS setup at all. Documenting failure forces you to check it. Both are now listed as open questions instead of surprises.
+- _2026-11-20:_ **Check a diagram with a real renderer, and see it reject a bad one.** A diagram that looks right in the editor can fail on GitHub. A semicolon inside a sequence-diagram note breaks it. I rendered every diagram and also fed in two broken ones to prove the check can fail. Rendering without errors still doesn't mean readable: my first overview diagram rendered fine but was a tangle, so I redrew it top to bottom.
+- _2026-11-20:_ **Name what is `built` and what is `planned`.** Dashed outlines plus the word "planned" in the label mean the diagram never claims more than the code does, and it still works for someone who can't tell the colors apart.
 
 - _2026-11-20:_ **A guard test should be seen failing.** The query-count test asserts "exactly 2 statements", but a number that is always 2 could also mean the counter is broken. The deliberate N+1 test shows the counter really goes up when the code does it the slow way. Hibernate's `generate_statistics` counts every statement it prepares, so the assertion fails the moment someone adds a lazy lookup per card.
 - _2026-11-20:_ **Docker must be running for the integration tests.** Docker Desktop was paused, so the `@SpringBootTest` classes had nowhere to connect. The unit tests (fakes, MockMvc) don't need it, which is why only some tests fail without Docker.
