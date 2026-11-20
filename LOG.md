@@ -14,16 +14,25 @@ Ideas, features, and work we've agreed to do but haven't started.
 - [ ] Later / stretch: phone sign-up and SMS notifications (postponed)
 - [ ] Decide how AWS fits in (hosting, storage, DB, CI/CD)
 - [ ] Scaffold `frontend/` (React)
+- [ ] Add the `architecture/` folder (README, `data-flow.md` with Mermaid diagrams, `changes.md`) on its own `docs/` branch, right after `feat/feed-api` is pushed and merged. Mark everything `built` or `planned`.
 
 ## 🚧 In Progress
 What's being worked on right now.
 
-- AniList sync job (branch `feat/anilist-sync`): response models ✅, HTTP client ✅, mapper to entities ✅, sync service for shows + genres ✅, airing episodes ✅, 3-hour schedule ✅, airing-schedule download split into time windows to get under AniList's 5,000-entry limit ✅, wrap AniList HTTP errors in `AniListException` ✅, handle timeouts and retry transient failures ✅, then the PR ☐
+- Feed API (branch `feat/feed-api`): `AnimeCard` DTO + display labels ✅, repository queries (`join fetch` genres, grouped max-aired-episode query) and a feed service ✅, three endpoints (`/api/anime/airing`, `/finished`, `/upcoming`) ✅, a test that counts queries ✅. Next: push the branch, open the PR (squash merge)
+- AniList sync job: done and merged (PR #5).
 
 ## ✅ Changelog (done)
 What changed, when, and why.
 
+### 2026-11-20
+- Added `FeedQueryCountTest`, a guard for my batching decision. It seeds 30 shows per section (3 genres and 2 aired episodes each), turns on Hibernate's statistics, and asserts that `airing`, `finished` and `upcoming` each cost exactly 2 SQL statements. A fourth test does a deliberate N+1 (look up each show, then touch its genres) and asserts the counter sees at least 60 statements, to prove the counter measures something. The full suite passes (66 tests, 0 failures) with Postgres running in Docker.
+
 ### 2026-10-31
+- Added `FeedController` with `GET /api/anime/airing`, `/finished` and `/upcoming`. Each calls the matching `FeedService` method and returns the cards as JSON. 4 MockMvc tests (fake service, no database): the JSON fields, one URL per section, `anilistId` and `syncedAt` never in the response, and 404 for an unknown URL. Checked against the real database with `curl`: newest premiere first, labels like "Ep 2 / ?" and "Fall 2026", unrated shows have a `null` score.
+- Added the feed's data layer. `AnimeRepository` has three JPQL queries (airing, finished since Jan 1, upcoming in the next 3 months), each loading a show's genres in the same query with `left join fetch`. `AiringEpisodeRepository.findMaxAiredEpisodes` returns the latest aired episode for a whole list of shows in one grouped query. `FeedService` builds the three card lists with 2 queries per section, however many cards. 3 integration tests. `YEAR_START` and `UPCOMING_MONTHS` in `AnimeSyncService` are now public so the sync and the feed share them.
+- Added the `feed/` package with `AnimeCard`, the record the API sends for one show, and `CardLabels`, which turns database values into display text ("Oct 4, 2026", "April 2027", "Fall 2026", "TV Short", "Ep 4 / 12", "Ep 1168 / ?"). The card leaves out internal fields like `anilistId`, and an unrated show has a `null` score so React shows NEW. 8 unit tests.
+- Merged PR #5 (the AniList sync: client, mapper, per-page transactions, episode sync, 3-hour scheduler).
 - `AniListClient` now retries failures that might fix themselves, up to 3 attempts in total: timeouts and connection problems, and HTTP 502/503/504, wait 5 s then 10 s (exponential backoff); 429 still waits for `Retry-After`. Other errors (other 4xx, a plain 500, unreadable JSON) fail right away. Everything leaves the client as an `AniListException`. Pulled the waiting into a `pause` method. 5 new tests.
 - `AniListClient` now turns every HTTP error other than 429 (any 4xx or 5xx) into an `AniListException` whose message has the status code and the start of AniList's own response body, with the original error kept as the cause. The 400 from the 5,000-entry limit would now read "AniList returned HTTP 400: ...Page depth exceeds maximum allowed...". 2 new tests (400 and 500).
 - Fixed the episode sync hitting AniList's 5,000-entry limit: `EpisodeSyncService` now fetches the year in 30-day windows (about 11 of them right now), saves each window page by page, and counts a failed window download in a new `failedWindows` field without stopping the others. 4 unit tests, including no gaps or overlaps between windows. Checked against the real AniList and it works.
@@ -60,6 +69,16 @@ What changed, when, and why.
 
 ## 🤔 Decisions & Open Questions
 Choices made (and why), plus questions still open.
+
+- **Open (2026-10-31):** Many shows have `titleEnglish: null`, so the React card has to fall back to `titleRomaji` (and decide which title is the main one when both exist). That's a frontend decision for `feat/feed-ui`.
+
+- **Decided (2026-10-31):** The feed has **three endpoints**: `/api/anime/airing`, `/finished` and `/upcoming`. One failing doesn't affect the others, and each is a small query that's easy to test. The three requests run in parallel, and React should render each section whenever its data arrives, since no section is guaranteed to finish first.
+- **Decided (2026-10-31):** The API returns a **DTO record** (`AnimeCard`), not the entity. It carries only what the screen needs and keeps internal fields such as `anilistId` in the backend, and the backend does the computing (episodes, dates).
+- **Decided (2026-10-31):** The backend sends **ready-made display text** (dates, season, format, episodes) and React just prints it. Dates match their precision: "Oct 4, 2026", "April 2027", "2027". I also extended that to the season, format and episode text.
+- **Decided (2026-10-31):** **No pagination** in V1. The real counts are 217 airing, 436 finished and 163 upcoming (816 in total, matching the sync), so a section is at most about 240 KB of JSON (an estimate). The cover images are the real cost, so React uses lazy loading.
+- **Decided (2026-10-31):** Genres and episodes are fetched in **batches** (Hibernate `join fetch` for genres, one grouped query for the episode numbers), not one query per card. `join fetch` on a collection would force in-memory paging, which doesn't matter while there's no pagination. If I paginate later, I'll need a different approach.
+- **Open (2026-10-31):** The start of the year is a hard-coded constant (`2026-01-01`), so in 2027 "Finished this year" would keep growing instead of resetting. It needs updating then.
+- **Open (2026-10-31):** "Upcoming" only includes shows whose start date is today or later and inside the next 3 months. A show stuck as NOT_YET_RELEASED with a start date that has passed would vanish from every section.
 
 - **Decided (Oct 31):** AniList requests get **3 attempts in total**, so at most 2 waits (5 s, then 10 s) and none after the last try. 429 uses AniList's `Retry-After`. Only errors that might clear up by themselves are retried: timeouts, connection problems, 502, 503, 504. A plain 500 and other 4xx are not, because repeating them would give the same result. Retrying is safe because these requests only read data. Worst case: a dead request can cost about 1.5 minutes (three 30 s read timeouts) plus the waits.
 
@@ -130,6 +149,21 @@ Choices made (and why), plus questions still open.
 
 ## 💭 Reflections & Lessons Learned
 What I learned, what surprised me, what I'd do differently.
+
+- _2026-11-20:_ **A guard test should be seen failing.** The query-count test asserts "exactly 2 statements", but a number that is always 2 could also mean the counter is broken. The deliberate N+1 test shows the counter really goes up when the code does it the slow way. Hibernate's `generate_statistics` counts every statement it prepares, so the assertion fails the moment someone adds a lazy lookup per card.
+- _2026-11-20:_ **Docker must be running for the integration tests.** Docker Desktop was paused, so the `@SpringBootTest` classes had nowhere to connect. The unit tests (fakes, MockMvc) don't need it, which is why only some tests fail without Docker.
+
+- _2026-10-31:_ **A controller should only map a URL to a service call.** `@RestController` writes the returned objects into the HTTP response as JSON (Jackson turns the records into fields), and `@GetMapping` ties a URL to a method. With no logic inside, a MockMvc test can check the URLs and the JSON with a fake service, no server and no database, in milliseconds.
+- _2026-10-31:_ **Test what must never leak, not just what must appear.** One test asserts that `anilistId` and `syncedAt` are absent from the JSON, so a future change to the DTO can't expose them by accident.
+- _2026-10-31:_ **Look at the real output once.** The unit tests use a fake, so only `curl` against my real database showed the whole path working: the JPQL queries, the ordering, the labels and the nulls on real shows.
+
+- _2026-10-31:_ **`left join fetch` loads a parent and its children in one query.** The result has one row per genre, and Hibernate merges the repeated rows back into one `Anime`. "Left" keeps shows with no genres, which an inner join would drop. I check it with a show that has two genres: it must appear once.
+- _2026-10-31:_ **A grouped query answers "for each show" in one trip.** `select anime_id, max(episode) ... where anime_id in (...) group by anime_id` replaces one query per card. Shows with no matching row are just missing from the result, so the code treats a missing entry as "nothing to show".
+- _2026-10-31:_ **Tests that share a database with real data must only judge their own rows.** My feed tests name their shows "Test Feed ..." and compare order only among those, so the 816 real shows can't break them.
+
+- _2026-10-31:_ **A DTO is a contract.** An entity mirrors the database; a DTO (data transfer object) is the shape I promise the frontend. Returning an entity leaks internal columns, and with `open-in-view=false` it also fails when lazy data (genres) is read after the transaction ends. A record is a small, immutable class that makes a DTO cheap to write.
+- _2026-10-31:_ **The N+1 problem** is 1 query for the list plus 1 more per card, so 60 cards with genres and episodes is 121 queries instead of 2, and each query is a network trip to the database. It hides on a laptop and hurts on bigger data or a slower network. Batching fixes it, and a test that counts queries keeps it from coming back.
+- _2026-10-31:_ **Check each design choice for what it rules out.** `join fetch` on a collection is incompatible with database-level pagination, so my "no pagination" decision and my fetching decision depend on each other.
 
 - _2026-10-31:_ **Retry only what can change.** A timeout or a 503 may work a few seconds later; a 400 for a bad query never will. Waiting longer each time (exponential backoff: 5 s, 10 s) avoids hammering a service that is already struggling, like waiting longer before redialing a busy line. Order the `catch` blocks from most specific to most general (429, then no response, then other HTTP errors, then anything else); Java refuses to compile a general class before its subclass.
 
